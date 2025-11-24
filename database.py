@@ -19,11 +19,12 @@ class Database:
             # Use the transaction pooler connection string
             connection_string = f"postgresql://postgres.ghtyujswncdqrhetoovy:{encoded_password}@aws-1-us-east-2.pooler.supabase.com:6543/postgres"
 
+            # IMPORTANT: Disable statement caching for transaction pooler
             self.pool = await asyncpg.create_pool(
                 connection_string,
                 ssl='require',
                 min_size=1,
-                max_size=10
+                max_size=10,
             )
 
             # Create tables
@@ -39,7 +40,7 @@ class Database:
             print("✅ Connected to Supabase database via pooler!")
             return True
         except Exception as e:
-            print(f"❌ Database connection failed: {e}")
+            print(f"Database connection failed: {e}")
             return False
 
     async def register_user(self, discord_id: int, epic_username: str):
@@ -51,6 +52,14 @@ class Database:
                 ON CONFLICT (discord_id) 
                 DO UPDATE SET epic_username = EXCLUDED.epic_username
             ''', discord_id, epic_username)
+
+    async def unregister_user(self, discord_id: int):
+        """Remove a user's registration"""
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                'DELETE FROM users WHERE discord_id = $1',
+                discord_id
+            )
 
     async def get_user(self, discord_id: int):
         """Get user's Epic username"""
