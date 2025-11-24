@@ -6,64 +6,117 @@ import json
 
 load_dotenv()
 
-async def get_player_stats(username):
-    api_key = os.getenv('FORTNITE_API_KEY')
+async def get_player_stats(username, platform="all"):
+    """
+    Get Fortnite player stats using fortnite-api.com
+    Platform can be: all, kbm (keyboard/mouse), gamepad, or touch
+    """
 
     async with aiohttp.ClientSession() as session:
-        headers = {'Authorization': api_key}
+        headers = {}
+        api_key = os.getenv('FORTNITE_API_KEY')  # Optional
+        if api_key:
+            headers['Authorization'] = api_key
 
-        # Step 1: Look up account ID
-        lookup_url = f"https://fortniteapi.io/v1/lookup?username={username}"
+        stats_url = "https://fortnite-api.com/v2/stats/br/v2"
+        params = {
+            'name': username,
+            'accountType': 'epic',
+            'timeWindow': 'lifetime',
+        }
 
-        print(f"Looking up: {username}")
-        async with session.get(lookup_url, headers=headers) as response:
-            if response.status != 200:
-                print(f"Lookup failed: {response.status}")
-                return None
+        if platform != "all":
+            params['image'] = platform
 
-            data = await response.json()
-            if not data.get('result'):
-                print(f"Account not found: {data.get('error')}")
-                return None
+        print(f"Looking up stats for: {username}")
 
-            account_id = data.get('account_id')
-            print(f"✅ Found account ID: {account_id}")
+        try:
+            async with session.get(stats_url, params=params, headers=headers, timeout=10) as response:
+                print(f"Status: {response.status}")
 
-        # Step 2: Get stats using account ID
-        stats_url = f"https://fortniteapi.io/v1/stats?account={account_id}&platform=all"
+                if response.status == 200:
+                    data = await response.json()
 
-        print("\nFetching stats...")
-        async with session.get(stats_url, headers=headers) as response:
-            if response.status != 200:
-                print(f"Stats request failed: {response.status}")
-                return None
+                    if data.get('status') == 200:
+                        stats_data = data.get('data', {})
 
-            stats_data = await response.json()
-            if stats_data.get('result'):
-                print("✅ Got stats!")
-                print(stats_data)
-                # Display the stats
-                print(f"\nPlayer: {stats_data.get('name')}")
-                print(f"Level: {stats_data.get('level')}")
-                print(f"Battle Pass Level: {stats_data.get('battle_pass_level')}")
+                        print("✅ Got stats!")
 
-                global_stats = stats_data.get('global_stats', {})
+                        # Display account info
+                        account = stats_data.get('account', {})
+                        print(f"\nPlayer: {account.get('name')}")
+                        print(f"Account ID: {account.get('id')}")
 
-                # Show stats for all modes
-                for mode in ['solo', 'duo', 'trio', 'squad']:
-                    if mode in global_stats:
-                        mode_stats = global_stats[mode]
-                        print(f"\n{mode.capitalize()} Stats:")
-                        print(f"  Wins: {mode_stats.get('wins', 0)}")
-                        print(f"  K/D: {mode_stats.get('kd', 0)}")
-                        print(f"  Kills: {mode_stats.get('kills', 0)}")
-                        print(f"  Matches: {mode_stats.get('matchesplayed', 0)}")
-                        print(f"  Win Rate: {mode_stats.get('winrate', 0)}%")
+                        # Get battle pass info
+                        bp_info = stats_data.get('battlePass', {})
+                        if bp_info:
+                            print(f"Battle Pass Level: {bp_info.get('level', 'N/A')}")
+                            print(f"Progress: {bp_info.get('progress', 0)}%")
 
-                return stats_data
-            else:
-                print(f"No stats available: {stats_data.get('error')}")
-                return None
+                        # Get overall stats
+                        overall_stats = stats_data.get('stats', {}).get('all', {})
+                        if not overall_stats:
+                            print("No stats available - account might be private")
+                            return None
+
+                        overall = overall_stats.get('overall', {})
+                        if overall:
+                            print(f"\n📊 Overall Lifetime Stats:")
+                            print(f"  Total Wins: {overall.get('wins', 0)}")
+                            print(f"  Win Rate: {overall.get('winRate', 0):.0f}%")
+                            print(f"  K/D: {overall.get('kd', 0):.2f}")
+                            print(f"  Kills: {overall.get('kills', 0)}")
+                            print(f"  Matches: {overall.get('matches', 0)}")
+                            print(f"  Total Time Played: {overall.get('minutesPlayed', 0) // 60} hours")
+
+                        # Show stats by game mode with ALL placement tiers
+                        for mode in ['solo', 'duo', 'trio', 'squad']:
+                            mode_stats = overall_stats.get(mode, {})
+                            if mode_stats:
+                                print(f"\n{mode.capitalize()} Stats:")
+                                print(f"  Wins: {mode_stats.get('wins', 0)}")
+
+                                # Show stats by game mode
+                                for mode in ['solo', 'duo', 'trio', 'squad']:
+                                    mode_stats = overall_stats.get(mode, {})
+                                    if mode_stats:
+                                        print(f"\n{mode.capitalize()} Stats:")
+                                        print(f"  Wins: {mode_stats.get('wins', 0)}")
+                                        print(f"  K/D: {mode_stats.get('kd', 0):.2f}")
+                                        print(f"  Kills: {mode_stats.get('kills', 0)}")
+                                        print(f"  Matches: {mode_stats.get('matches', 0)}")
+                                        print(f"  Win Rate: {mode_stats.get('winRate', 0):.0f}%")
+
+                                        # Just show whatever "top X" fields exist in the data
+                                        for key in mode_stats:
+                                            if key.startswith('top'):
+                                                print(f"  {key.capitalize()}: {mode_stats[key]}")
+
+                        return stats_data
+                    else:
+                        error = data.get('error', 'Unknown error')
+                        print(f"API Error: {error}")
+                        return None
+
+                elif response.status == 404:
+                    print("Player not found - check the username or account might be private")
+                    return None
+
+                elif response.status == 403:
+                    print("Access denied - stats might be private")
+                    return None
+
+                else:
+                    text = await response.text()
+                    print(f"Error {response.status}: {text[:200]}")
+                    return None
+
+        except asyncio.TimeoutError:
+            print("Request timed out")
+            return None
+        except Exception as e:
+            print(f"Error: {e}")
+            return None
 
 # Test it
-asyncio.run(get_player_stats("X Ǝ Λ"))  # Replace with your username
+asyncio.run(get_player_stats("X Ǝ Λ"))
