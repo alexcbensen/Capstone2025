@@ -87,7 +87,15 @@ async def unregister(interaction: discord.Interaction):
 
 # Me command - get your stats without typing username
 @tree.command(name='me', description='Get your Fortnite stats')
-async def me(interaction: discord.Interaction):
+@app_commands.describe(mode='Game mode: all, solo, duo, trio, or squad')
+@app_commands.choices(mode=[
+    app_commands.Choice(name='All Modes', value='all'),
+    app_commands.Choice(name='Solo', value='solo'),
+    app_commands.Choice(name='Duo', value='duo'),
+    app_commands.Choice(name='Trio', value='trio'),
+    app_commands.Choice(name='Squad', value='squad'),
+])
+async def me(interaction: discord.Interaction, mode: str = 'all'):
     await interaction.response.defer()
 
     # Get registered username from database
@@ -120,23 +128,60 @@ async def me(interaction: discord.Interaction):
                     if data.get('status') == 200:
                         stats_data = data.get('data', {})
                         account = stats_data.get('account', {})
-                        overall_stats = stats_data.get('stats', {}).get('all', {}).get('overall', {})
+                        all_stats = stats_data.get('stats', {}).get('all', {})
 
-                        # Create stats embed
-                        embed = discord.Embed(
-                            title=f"{account.get('name')}'s Stats",
-                            color=discord.Color.blue()
-                        )
+                        # Create appropriate embed based on mode
+                        if mode == 'all':
+                            # Show overall stats
+                            overall_stats = all_stats.get('overall', {})
+                            embed = discord.Embed(
+                                title=f"📊 Your Overall Stats",
+                                color=discord.Color.blue()
+                            )
 
-                        if overall_stats:
-                            embed.add_field(name="Wins", value=f"{overall_stats.get('wins', 0):,}", inline=True)
-                            embed.add_field(name="K/D", value=f"{overall_stats.get('kd', 0):.2f}", inline=True)
-                            embed.add_field(name="Win Rate", value=f"{overall_stats.get('winRate', 0):.0f}%", inline=True)
-                            embed.add_field(name="Kills", value=f"{overall_stats.get('kills', 0):,}", inline=True)
-                            embed.add_field(name="Matches", value=f"{overall_stats.get('matches', 0):,}", inline=True)
-                            embed.add_field(name="Hours Played", value=f"{overall_stats.get('minutesPlayed', 0) // 60:,}", inline=True)
+                            if overall_stats:
+                                embed.add_field(name="Total Wins", value=f"{overall_stats.get('wins', 0):,}", inline=True)
+                                embed.add_field(name="K/D", value=f"{overall_stats.get('kd', 0):.2f}", inline=True)
+                                embed.add_field(name="Win Rate", value=f"{overall_stats.get('winRate', 0):.0f}%", inline=True)
+                                embed.add_field(name="Kills", value=f"{overall_stats.get('kills', 0):,}", inline=True)
+                                embed.add_field(name="Matches", value=f"{overall_stats.get('matches', 0):,}", inline=True)
+                                embed.add_field(name="Hours Played", value=f"{overall_stats.get('minutesPlayed', 0) // 60:,}", inline=True)
+                            else:
+                                embed.description = "Stats are private or unavailable"
                         else:
-                            embed.description = "Stats are private or unavailable"
+                            # Show specific mode stats
+                            mode_stats = all_stats.get(mode, {})
+                            mode_display = mode.capitalize()
+                            embed = discord.Embed(
+                                title=f"🎮 Your {mode_display} Stats",
+                                color=discord.Color.purple()
+                            )
+
+                            if mode_stats:
+                                embed.add_field(name="Wins", value=f"{mode_stats.get('wins', 0):,}", inline=True)
+                                embed.add_field(name="K/D", value=f"{mode_stats.get('kd', 0):.2f}", inline=True)
+                                embed.add_field(name="Win Rate", value=f"{mode_stats.get('winRate', 0):.0f}%", inline=True)
+                                embed.add_field(name="Kills", value=f"{mode_stats.get('kills', 0):,}", inline=True)
+                                embed.add_field(name="Deaths", value=f"{mode_stats.get('deaths', 0):,}", inline=True)
+                                embed.add_field(name="Matches", value=f"{mode_stats.get('matches', 0):,}", inline=True)
+
+                                # Add placement stats based on mode
+                                if mode == 'solo':
+                                    embed.add_field(name="Top 10", value=f"{mode_stats.get('top10', 0):,}", inline=True)
+                                    embed.add_field(name="Top 25", value=f"{mode_stats.get('top25', 0):,}", inline=True)
+                                elif mode == 'duo':
+                                    embed.add_field(name="Top 5", value=f"{mode_stats.get('top5', 0):,}", inline=True)
+                                    embed.add_field(name="Top 12", value=f"{mode_stats.get('top12', 0):,}", inline=True)
+                                elif mode == 'trio':
+                                    embed.add_field(name="Top 3", value=f"{mode_stats.get('top3', 0):,}", inline=True)
+                                    embed.add_field(name="Top 6", value=f"{mode_stats.get('top6', 0):,}", inline=True)
+                                elif mode == 'squad':
+                                    embed.add_field(name="Top 3", value=f"{mode_stats.get('top3', 0):,}", inline=True)
+                                    embed.add_field(name="Top 6", value=f"{mode_stats.get('top6', 0):,}", inline=True)
+
+                                embed.add_field(name="Avg Kills/Match", value=f"{mode_stats.get('killsPerMatch', 0):.1f}", inline=True)
+                            else:
+                                embed.description = f"No {mode_display} stats available"
 
                         embed.set_footer(text=f"Registered as: {epic_username}")
                         await interaction.followup.send(embed=embed)
@@ -173,14 +218,24 @@ async def update(interaction: discord.Interaction, new_epic_username: str):
 
     await interaction.followup.send(embed=embed)
 
+# Update your stats command in main.py
+
 @tree.command(name='stats', description='Get Fortnite player statistics')
-async def stats(interaction: discord.Interaction, username: str):
+@app_commands.describe(
+    username='Epic Games username',
+    mode='Game mode: all, solo, duo, trio, or squad'
+)
+@app_commands.choices(mode=[
+    app_commands.Choice(name='All Modes', value='all'),
+    app_commands.Choice(name='Solo', value='solo'),
+    app_commands.Choice(name='Duo', value='duo'),
+    app_commands.Choice(name='Trio', value='trio'),
+    app_commands.Choice(name='Squad', value='squad'),
+])
+async def stats(interaction: discord.Interaction, username: str, mode: str = 'all'):
     await interaction.response.defer()
 
-    print(f"Received username: {username}")
-
     async with aiohttp.ClientSession() as session:
-        # Get API key and add to headers
         api_key = os.getenv('FORTNITE_API_KEY')
         headers = {'Authorization': api_key} if api_key else {}
 
@@ -193,29 +248,65 @@ async def stats(interaction: discord.Interaction, username: str):
 
         try:
             async with session.get(stats_url, params=params, headers=headers, timeout=10) as response:
-                #print(f"API Status: {response.status}")
-
                 if response.status == 200:
                     data = await response.json()
                     if data.get('status') == 200:
                         stats_data = data.get('data', {})
                         account = stats_data.get('account', {})
-                        overall_stats = stats_data.get('stats', {}).get('all', {}).get('overall', {})
+                        all_stats = stats_data.get('stats', {}).get('all', {})
 
-                        embed = discord.Embed(
-                            title=f"{account.get('name')}'s Stats",
-                            color=discord.Color.blue()
-                        )
+                        # Create appropriate embed based on mode
+                        if mode == 'all':
+                            # Show overall stats
+                            overall_stats = all_stats.get('overall', {})
+                            embed = discord.Embed(
+                                title=f"{account.get('name')}'s Overall Stats",
+                                color=discord.Color.blue()
+                            )
 
-                        if overall_stats:
-                            embed.add_field(name="Wins", value=f"{overall_stats.get('wins', 0):,}", inline=True)
-                            embed.add_field(name="K/D", value=f"{overall_stats.get('kd', 0):.2f}", inline=True)
-                            embed.add_field(name="Win Rate", value=f"{overall_stats.get('winRate', 0):.0f}%", inline=True)
-                            embed.add_field(name="Kills", value=f"{overall_stats.get('kills', 0):,}", inline=True)
-                            embed.add_field(name="Matches", value=f"{overall_stats.get('matches', 0):,}", inline=True)
-                            embed.add_field(name="Hours Played", value=f"{overall_stats.get('minutesPlayed', 0) // 60:,}", inline=True)
+                            if overall_stats:
+                                embed.add_field(name="Total Wins", value=f"{overall_stats.get('wins', 0):,}", inline=True)
+                                embed.add_field(name="K/D", value=f"{overall_stats.get('kd', 0):.2f}", inline=True)
+                                embed.add_field(name="Win Rate", value=f"{overall_stats.get('winRate', 0):.0f}%", inline=True)
+                                embed.add_field(name="Kills", value=f"{overall_stats.get('kills', 0):,}", inline=True)
+                                embed.add_field(name="Matches", value=f"{overall_stats.get('matches', 0):,}", inline=True)
+                                embed.add_field(name="Hours Played", value=f"{overall_stats.get('minutesPlayed', 0) // 60:,}", inline=True)
+                            else:
+                                embed.description = "Stats are private or unavailable"
                         else:
-                            embed.description = "Stats are private or unavailable"
+                            # Show specific mode stats
+                            mode_stats = all_stats.get(mode, {})
+                            mode_display = mode.capitalize()
+                            embed = discord.Embed(
+                                title=f"{account.get('name')}'s {mode_display} Stats",
+                                color=discord.Color.purple()
+                            )
+
+                            if mode_stats:
+                                embed.add_field(name="Wins", value=f"{mode_stats.get('wins', 0):,}", inline=True)
+                                embed.add_field(name="K/D", value=f"{mode_stats.get('kd', 0):.2f}", inline=True)
+                                embed.add_field(name="Win Rate", value=f"{mode_stats.get('winRate', 0):.0f}%", inline=True)
+                                embed.add_field(name="Kills", value=f"{mode_stats.get('kills', 0):,}", inline=True)
+                                embed.add_field(name="Deaths", value=f"{mode_stats.get('deaths', 0):,}", inline=True)
+                                embed.add_field(name="Matches", value=f"{mode_stats.get('matches', 0):,}", inline=True)
+
+                                # Add placement stats based on mode
+                                if mode == 'solo':
+                                    embed.add_field(name="Top 10", value=f"{mode_stats.get('top10', 0):,}", inline=True)
+                                    embed.add_field(name="Top 25", value=f"{mode_stats.get('top25', 0):,}", inline=True)
+                                elif mode == 'duo':
+                                    embed.add_field(name="Top 5", value=f"{mode_stats.get('top5', 0):,}", inline=True)
+                                    embed.add_field(name="Top 12", value=f"{mode_stats.get('top12', 0):,}", inline=True)
+                                elif mode == 'trio':
+                                    embed.add_field(name="Top 3", value=f"{mode_stats.get('top3', 0):,}", inline=True)
+                                    embed.add_field(name="Top 6", value=f"{mode_stats.get('top6', 0):,}", inline=True)
+                                elif mode == 'squad':
+                                    embed.add_field(name="Top 3", value=f"{mode_stats.get('top3', 0):,}", inline=True)
+                                    embed.add_field(name="Top 6", value=f"{mode_stats.get('top6', 0):,}", inline=True)
+
+                                embed.add_field(name="Avg Kills/Match", value=f"{mode_stats.get('killsPerMatch', 0):.1f}", inline=True)
+                            else:
+                                embed.description = f"No {mode_display} stats available"
 
                         await interaction.followup.send(embed=embed)
                     else:
@@ -224,7 +315,7 @@ async def stats(interaction: discord.Interaction, username: str):
                     await interaction.followup.send(f"Could not find player `{username}` or their stats are private")
 
         except Exception as e:
-            await interaction.followup.send(f"Error fetching stats")
+            await interaction.followup.send(f"Error fetching stats: {e}")
 
 # Run the bot
 client.run(os.getenv('DISCORD_TOKEN'))
