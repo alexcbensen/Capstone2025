@@ -25,6 +25,7 @@ class Database:
                 ssl='require',
                 min_size=1,
                 max_size=10,
+                statement_cache_size=0  # <-- Add this line to fix the error
             )
 
             # Create tables
