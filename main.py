@@ -38,21 +38,41 @@ async def register(interaction: discord.Interaction, epic_username: str):
     await interaction.response.defer()
 
     try:
-        await db.register_user(interaction.user.id, epic_username)
+        # First, try to get the account ID from Fortnite-API.com
+        account_id = None
 
-        # Create a nice embed response
+        async with aiohttp.ClientSession() as session:
+            headers = {'Authorization': os.getenv('FORTNITE_API_KEY')}
+            stats_url = "https://fortnite-api.com/v2/stats/br/v2"
+            params = {
+                'name': epic_username,
+                'accountType': 'epic',
+                'timeWindow': 'lifetime',
+            }
+
+            async with session.get(stats_url, params=params, headers=headers, timeout=10) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get('status') == 200:
+                        stats_data = data.get('data', {})
+                        account = stats_data.get('account', {})
+                        account_id = account.get('id')  # Get the account ID
+
+        # Save to database with account ID
+        await db.register_user(interaction.user.id, epic_username, account_id)
+
         embed = discord.Embed(
             title="Account Registered!",
             description=f"Successfully linked **{epic_username}** to your Discord account",
             color=discord.Color.green()
         )
+        if account_id:
+            embed.add_field(name="Account ID", value=f"`{account_id}`", inline=False)
         embed.set_footer(text="You can now use /me to check your stats quickly!")
 
         await interaction.followup.send(embed=embed)
     except Exception as e:
         await interaction.followup.send(f"Registration failed: {e}")
-
-# Add this command to your main.py
 
 @tree.command(name='unregister', description='Remove your linked Epic Games account')
 async def unregister(interaction: discord.Interaction):
@@ -218,8 +238,6 @@ async def update(interaction: discord.Interaction, new_epic_username: str):
 
     await interaction.followup.send(embed=embed)
 
-# Update your stats command in main.py
-
 @tree.command(name='stats', description='Get Fortnite player statistics')
 @app_commands.describe(
     username='Epic Games username',
@@ -316,6 +334,129 @@ async def stats(interaction: discord.Interaction, username: str, mode: str = 'al
 
         except Exception as e:
             await interaction.followup.send(f"Error fetching stats: {e}")
+
+@tree.command(name='leaderboard', description='Show server leaderboard')
+@app_commands.describe(
+    stat='Stat to rank by',
+    mode='Game mode to filter'
+)
+@app_commands.choices(
+    stat=[
+        app_commands.Choice(name='Wins', value='wins'),
+        app_commands.Choice(name='K/D Ratio', value='kd'),
+        app_commands.Choice(name='Win Rate', value='winrate'),
+        app_commands.Choice(name='Kills', value='kills'),
+    ],
+    mode=[
+        app_commands.Choice(name='All Modes', value='overall'),
+        app_commands.Choice(name='Solo', value='solo'),
+        app_commands.Choice(name='Duo', value='duo'),
+        app_commands.Choice(name='Trio', value='trio'),
+        app_commands.Choice(name='Squad', value='squad'),
+    ]
+)
+async def leaderboard(interaction: discord.Interaction, stat: str = 'wins', mode: str = 'overall'):
+    await interaction.response.defer()
+
+    # Get all registered users from database
+    async with db.pool.acquire() as conn:
+        rows = await conn.fetch('SELECT discord_id, epic_username FROM users')
+
+    if not rows:
+        await interaction.followup.send("No registered users yet! Use `/register` to add yourself.")
+        return
+
+    # Fetch stats for all registered users
+    leaderboard_data = []
+
+    async with aiohttp.ClientSession() as session:
+        headers = {'Authorization': os.getenv('FORTNITE_API_KEY')}
+
+        for row in rows:
+            discord_id = row['discord_id']
+            username = row['epic_username']
+
+            # Fetch their stats
+            stats_url = "https://fortnite-api.com/v2/stats/br/v2"
+            params = {
+                'name': username,
+                'accountType': 'epic',
+                'timeWindow': 'lifetime',
+            }
+
+            try:
+                async with session.get(stats_url, params=params, headers=headers, timeout=10) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        if data.get('status') == 200:
+                            stats_data = data.get('data', {})
+                            all_stats = stats_data.get('stats', {}).get('all', {})
+
+                            # Get the specific mode stats
+                            if mode == 'overall':
+                                mode_stats = all_stats.get('overall', {})
+                            else:
+                                mode_stats = all_stats.get(mode, {})
+
+                            if mode_stats:
+                                # Get ALL stats for display
+                                player_data = {
+                                    'username': username,
+                                    'discord_id': discord_id,
+                                    'wins': mode_stats.get('wins', 0),
+                                    'kd': mode_stats.get('kd', 0),
+                                    'winrate': mode_stats.get('winRate', 0),
+                                    'kills': mode_stats.get('kills', 0),
+                                    'matches': mode_stats.get('matches', 0),
+                                    'value': 0  # This will be set based on sort stat
+                                }
+
+                                # Set the value for sorting
+                                player_data['value'] = player_data[stat]
+
+                                leaderboard_data.append(player_data)
+            except Exception as e:
+                continue
+
+    if not leaderboard_data:
+        await interaction.followup.send("No stats found for this mode.")
+        return
+
+    # Sort by the requested stat
+    leaderboard_data.sort(key=lambda x: x['value'], reverse=True)
+
+    # Create embed
+    embed = discord.Embed(
+        title=f"🏆 Server Leaderboard",
+        description=f"**Sorted by:** {stat.upper()} | **Mode:** {mode.capitalize()}",
+        color=discord.Color.gold()
+    )
+
+    # Display top 10 with ALL stats
+    for i, player in enumerate(leaderboard_data[:10], 1):
+        # Try to get member name
+        member = interaction.guild.get_member(player['discord_id'])
+        display_name = member.display_name if member else player['username']
+
+        # Medals for top 3
+        medal = "🥇 " if i == 1 else "🥈 " if i == 2 else "🥉 " if i == 3 else ""
+
+        # Format all stats for display
+        stats_text = (
+            f"**Wins:** {player['wins']:,} | "
+            f"**K/D:** {player['kd']:.2f} | "
+            f"**WR:** {player['winrate']:.0f}% | "
+            f"**Kills:** {player['kills']:,}"
+        )
+
+        embed.add_field(
+            name=f"{medal}#{i} {display_name}",
+            value=stats_text,
+            inline=False
+        )
+
+    embed.set_footer(text=f"Showing top {min(10, len(leaderboard_data))} players • Sorted by {stat.upper()}")
+    await interaction.followup.send(embed=embed)
 
 # Run the bot
 client.run(os.getenv('DISCORD_TOKEN'))
