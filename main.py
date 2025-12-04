@@ -748,5 +748,93 @@ async def squad_info(interaction: discord.Interaction, squad_name: str = None):
     except Exception as e:
         await interaction.followup.send(f"Error getting squad info: {e}")
 
+@tree.command(name='squad_stats', description='View combined squad statistics')
+@app_commands.describe(squad_name='Squad name (leave empty for your squad)')
+async def squad_stats(interaction: discord.Interaction, squad_name: str = None):
+    await interaction.response.defer()
+
+    try:
+        async with db.pool.acquire() as conn:
+            # Get squad info (similar to squad_info)
+            if not squad_name:
+                squad = await conn.fetchrow('''
+                    SELECT s.squad_id, s.squad_name
+                    FROM squad_members sm
+                    JOIN squads s ON s.squad_id = sm.squad_id
+                    WHERE sm.discord_id = $1 AND s.server_id = $2
+                ''', interaction.user.id, interaction.guild.id)
+            else:
+                squad = await conn.fetchrow('''
+                    SELECT squad_id, squad_name
+                    FROM squads
+                    WHERE squad_name = $1 AND server_id = $2
+                ''', squad_name, interaction.guild.id)
+
+            if not squad:
+                await interaction.followup.send("Squad not found!")
+                return
+
+            # Get all squad members' Epic usernames
+            members = await conn.fetch('''
+                SELECT u.epic_username
+                FROM squad_members sm
+                JOIN users u ON u.discord_id = sm.discord_id
+                WHERE sm.squad_id = $1 AND u.epic_username IS NOT NULL
+            ''', squad['squad_id'])
+
+        if not members:
+            await interaction.followup.send(f"No registered players in **{squad['squad_name']}**")
+            return
+
+        # Fetch stats for all members
+        total_wins = 0
+        total_kills = 0
+        total_matches = 0
+
+        async with aiohttp.ClientSession() as session:
+            headers = {'Authorization': os.getenv('FORTNITE_API_KEY')}
+
+            for member in members:
+                username = member['epic_username']
+                stats_url = "https://fortnite-api.com/v2/stats/br/v2"
+                params = {
+                    'name': username,
+                    'accountType': 'epic',
+                    'timeWindow': 'lifetime',
+                }
+
+                try:
+                    async with session.get(stats_url, params=params, headers=headers) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            if data.get('status') == 200:
+                                stats = data.get('data', {}).get('stats', {}).get('all', {}).get('overall', {})
+                                total_wins += stats.get('wins', 0)
+                                total_kills += stats.get('kills', 0)
+                                total_matches += stats.get('matches', 0)
+                except:
+                    continue
+
+        # Create embed
+        embed = discord.Embed(
+            title=f"Squad Stats: {squad['squad_name']}",
+            description=f"Combined lifetime performance ({len(members)} players)",
+            color=discord.Color.gold()
+        )
+
+        embed.add_field(name="Total Wins", value=f"{total_wins:,}", inline=True)
+        embed.add_field(name="Total Kills", value=f"{total_kills:,}", inline=True)
+        embed.add_field(name="Total Matches", value=f"{total_matches:,}", inline=True)
+
+        if total_matches > 0:
+            squad_kd = total_kills / (total_matches - total_wins) if (total_matches - total_wins) > 0 else total_kills
+            embed.add_field(name="Squad K/D", value=f"{squad_kd:.2f}", inline=True)
+            embed.add_field(name="Win Rate", value=f"{(total_wins/total_matches*100):.0f}%", inline=True)
+
+        await interaction.followup.send(embed=embed)
+
+    except Exception as e:
+        await interaction.followup.send(f"Error: {e}")
+
 # Run the bot
 client.run(os.getenv('DISCORD_TOKEN'))
