@@ -458,5 +458,295 @@ async def leaderboard(interaction: discord.Interaction, stat: str = 'wins', mode
     embed.set_footer(text=f"Showing top {min(10, len(leaderboard_data))} players • Sorted by {stat.upper()}")
     await interaction.followup.send(embed=embed)
 
+
+@tree.command(name='squad_create', description='Create a new squad')
+@app_commands.describe(squad_name='Name for your squad (3-20 characters)')
+async def squad_create(interaction: discord.Interaction, squad_name: str):
+    await interaction.response.defer()
+
+    # Validate squad name
+    if len(squad_name) < 3 or len(squad_name) > 20:
+        await interaction.followup.send("Squad name must be 3-20 characters!")
+        return
+
+    try:
+        async with db.pool.acquire() as conn:
+            # Check if user already owns a squad in this server
+            existing_owned = await conn.fetchval('''
+                SELECT squad_name FROM squads 
+                WHERE created_by = $1 AND server_id = $2
+            ''', interaction.user.id, interaction.guild.id)
+
+            if existing_owned:
+                await interaction.followup.send(f"You already own squad **{existing_owned}**! Delete it first with `/squad_delete`")
+                return
+
+            # Check if squad name exists in this server
+            existing = await conn.fetchval('''
+                SELECT COUNT(*) FROM squads 
+                WHERE squad_name = $1 AND server_id = $2
+            ''', squad_name, interaction.guild.id)
+
+            if existing > 0:
+                await interaction.followup.send(f"Squad **{squad_name}** already exists in this server!")
+                return
+
+            # Create the squad
+            squad_id = await conn.fetchval('''
+                INSERT INTO squads (squad_name, created_by, server_id)
+                VALUES ($1, $2, $3)
+                RETURNING squad_id
+            ''', squad_name, interaction.user.id, interaction.guild.id)
+
+            # Add creator as first member
+            await conn.execute('''
+                INSERT INTO squad_members (squad_id, discord_id)
+                VALUES ($1, $2)
+            ''', squad_id, interaction.user.id)
+
+        embed = discord.Embed(
+            title="Squad Created!",
+            description=f"**{squad_name}** is now recruiting!",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="Leader", value=interaction.user.mention, inline=True)
+        embed.add_field(name="Members", value="1/4", inline=True)
+        embed.set_footer(text=f"Others can join with: /squad_join {squad_name}")
+        await interaction.followup.send(embed=embed)
+
+    except Exception as e:
+        await interaction.followup.send(f"Error creating squad: {e}")
+
+@tree.command(name='squad_join', description='Join an existing squad')
+@app_commands.describe(squad_name='Name of the squad to join')
+async def squad_join(interaction: discord.Interaction, squad_name: str):
+    await interaction.response.defer()
+
+    try:
+        async with db.pool.acquire() as conn:
+            # Get squad info
+            squad = await conn.fetchrow('''
+                SELECT squad_id, created_by FROM squads 
+                WHERE squad_name = $1 AND server_id = $2
+            ''', squad_name, interaction.guild.id)
+
+            if not squad:
+                await interaction.followup.send(f"Squad **{squad_name}** not found in this server!")
+                return
+
+            squad_id = squad['squad_id']
+
+            # Check if already in a squad
+            current_squad = await conn.fetchval('''
+                SELECT s.squad_name 
+                FROM squad_members sm
+                JOIN squads s ON s.squad_id = sm.squad_id
+                WHERE sm.discord_id = $1 AND s.server_id = $2
+            ''', interaction.user.id, interaction.guild.id)
+
+            if current_squad:
+                if current_squad == squad_name:
+                    await interaction.followup.send(f"You're already in **{squad_name}**!")
+                else:
+                    await interaction.followup.send(f"You're already in squad **{current_squad}**! Leave it first with `/squad_leave`")
+                return
+
+            # Check squad size (max 4)
+            member_count = await conn.fetchval(
+                'SELECT COUNT(*) FROM squad_members WHERE squad_id = $1',
+                squad_id
+            )
+
+            if member_count >= 4:
+                await interaction.followup.send(f"Squad **{squad_name}** is full! (4/4)")
+                return
+
+            # Add to squad
+            await conn.execute(
+                'INSERT INTO squad_members (squad_id, discord_id) VALUES ($1, $2)',
+                squad_id, interaction.user.id
+            )
+
+            member_count += 1
+
+        embed = discord.Embed(
+            title="Joined Squad!",
+            description=f"Welcome to **{squad_name}**!",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="Members", value=f"{member_count}/4", inline=True)
+        await interaction.followup.send(embed=embed)
+
+    except Exception as e:
+        await interaction.followup.send(f"Error joining squad: {e}")
+
+@tree.command(name='squad_leave', description='Leave your current squad')
+async def squad_leave(interaction: discord.Interaction):
+    await interaction.response.defer()
+
+    try:
+        async with db.pool.acquire() as conn:
+            # Find user's squad
+            squad = await conn.fetchrow('''
+                SELECT s.squad_id, s.squad_name, s.created_by
+                FROM squad_members sm
+                JOIN squads s ON s.squad_id = sm.squad_id
+                WHERE sm.discord_id = $1 AND s.server_id = $2
+            ''', interaction.user.id, interaction.guild.id)
+
+            if not squad:
+                await interaction.followup.send("You're not in a squad!")
+                return
+
+            # Check if they're the owner
+            if squad['created_by'] == interaction.user.id:
+                await interaction.followup.send(
+                    f"You own **{squad['squad_name']}**! "
+                    f"Transfer ownership with `/squad_transfer` or delete with `/squad_delete`"
+                )
+                return
+
+            # Leave the squad
+            await conn.execute('''
+                DELETE FROM squad_members 
+                WHERE squad_id = $1 AND discord_id = $2
+            ''', squad['squad_id'], interaction.user.id)
+
+        embed = discord.Embed(
+            title="👋 Left Squad",
+            description=f"You've left **{squad['squad_name']}**",
+            color=discord.Color.orange()
+        )
+        await interaction.followup.send(embed=embed)
+
+    except Exception as e:
+        await interaction.followup.send(f"Error leaving squad: {e}")
+
+@tree.command(name='squad_list', description='List all squads in this server')
+async def squad_list(interaction: discord.Interaction):
+    await interaction.response.defer()
+
+    try:
+        async with db.pool.acquire() as conn:
+            squads = await conn.fetch('''
+                SELECT s.squad_name, s.created_by, COUNT(sm.discord_id) as member_count
+                FROM squads s
+                LEFT JOIN squad_members sm ON s.squad_id = sm.squad_id
+                WHERE s.server_id = $1
+                GROUP BY s.squad_id, s.squad_name, s.created_by
+                ORDER BY member_count DESC
+            ''', interaction.guild.id)
+
+        if not squads:
+            await interaction.followup.send("No squads in this server yet! Create one with `/squad_create`")
+            return
+
+        embed = discord.Embed(
+            title="Server Squads",
+            description=f"{len(squads)} active squads",
+            color=discord.Color.blue()
+        )
+
+        for squad in squads[:10]:  # Show top 10
+            # Convert to int when getting member
+            leader = interaction.guild.get_member(int(squad['created_by']))
+            if leader:
+                leader_name = leader.display_name
+            else:
+                # Fall back to mention format if member not found
+                leader_name = f"<@{squad['created_by']}>"
+
+            embed.add_field(
+                name=f"**{squad['squad_name']}**",
+                value=f"Leader: {leader_name}\nMembers: {squad['member_count']}/4",
+                inline=True
+            )
+
+        await interaction.followup.send(embed=embed)
+
+    except Exception as e:
+        await interaction.followup.send(f"Error listing squads: {e}")
+
+@tree.command(name='squad_info', description='View detailed squad information')
+@app_commands.describe(squad_name='Name of the squad')
+async def squad_info(interaction: discord.Interaction, squad_name: str = None):
+    await interaction.response.defer()
+
+    try:
+        async with db.pool.acquire() as conn:
+            if squad_name:
+                # Get specific squad
+                squad_query = '''
+                    SELECT s.squad_id, s.squad_name, s.created_by, s.created_at
+                    FROM squads s
+                    WHERE s.squad_name = $1 AND s.server_id = $2
+                '''
+                squad = await conn.fetchrow(squad_query, squad_name, interaction.guild.id)
+            else:
+                # Get user's squad
+                squad_query = '''
+                    SELECT s.squad_id, s.squad_name, s.created_by, s.created_at
+                    FROM squad_members sm
+                    JOIN squads s ON s.squad_id = sm.squad_id
+                    WHERE sm.discord_id = $1 AND s.server_id = $2
+                '''
+                squad = await conn.fetchrow(squad_query, interaction.user.id, interaction.guild.id)
+
+            if not squad:
+                if squad_name:
+                    await interaction.followup.send(f"Squad **{squad_name}** not found!")
+                else:
+                    await interaction.followup.send("You're not in a squad! Join one or specify a squad name.")
+                return
+
+            # Get members
+            members = await conn.fetch('''
+                SELECT sm.discord_id, u.epic_username
+                FROM squad_members sm
+                LEFT JOIN users u ON u.discord_id = sm.discord_id
+                WHERE sm.squad_id = $1
+            ''', squad['squad_id'])
+
+        # Create embed
+        embed = discord.Embed(
+            title=f"{squad['squad_name']}",
+            color=discord.Color.blue()
+        )
+
+        # Get leader from guild members
+        leader = interaction.guild.get_member(int(squad['created_by']))
+        embed.add_field(name="Leader", value=leader.mention if leader else f"<@{squad['created_by']}>", inline=True)
+        embed.add_field(name="Members", value=f"{len(members)}/4", inline=True)
+
+        # List members
+        member_list = []
+        for member_data in members:
+            member = interaction.guild.get_member(int(member_data['discord_id']))
+            if member:
+                epic = member_data['epic_username'] or "Not registered"
+                member_list.append(f"• {member.display_name} ({epic})")
+            else:
+                epic = member_data['epic_username'] or "Not registered"
+                member_list.append(f"• <@{member_data['discord_id']}> ({epic})")
+
+        if member_list:
+            embed.add_field(
+                name="Squad Members",
+                value="\n".join(member_list),
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="Squad Members",
+                value="No members found",
+                inline=False
+            )
+
+        embed.set_footer(text=f"Created: {squad['created_at'].strftime('%Y-%m-%d')}")
+        await interaction.followup.send(embed=embed)
+
+    except Exception as e:
+        await interaction.followup.send(f"Error getting squad info: {e}")
+
 # Run the bot
 client.run(os.getenv('DISCORD_TOKEN'))
