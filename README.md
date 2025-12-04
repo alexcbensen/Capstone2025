@@ -1,5 +1,7 @@
 # Fortnite Squad Stats Tracker Discord Bot
 
+**Status:** Live and Deployed on Railway
+
 ## Project Overview
 A Discord bot that integrates with a third-party Fortnite API to provide comprehensive player statistics, squad management, and leaderboard functionality for Discord communities.
 
@@ -37,6 +39,7 @@ A Discord bot that integrates with a third-party Fortnite API to provide compreh
 - **Discord Library:** discord.py
 - **Database:** PostgreSQL (Supabase)
 - **API:** Fortnite-API.com
+- **Hosting:** Railway (24/7 deployment)
 
 ## Setup Instructions
 
@@ -77,6 +80,34 @@ SUPABASE_PASSWORD=your_supabase_password
 ```bash
 python main.py
 ```
+
+## Deployment
+
+This bot is deployed on Railway for 24/7 availability.
+
+### Hosting Details
+- **Platform:** Railway (railway.app)
+- **Runtime:** Python 3.12
+- **Auto-Deploy:** Enabled (deploys on push to main branch)
+- **Status:** Live and operational
+
+### Environment Variables Required
+The following environment variables must be configured in your deployment:
+- `DISCORD_TOKEN` - Discord bot authentication token
+- `FORTNITE_API_KEY` - Fortnite-API.com access key
+- `SUPABASE_PASSWORD` - Database connection password
+
+### Deployment Steps
+1. Fork/clone this repository
+2. Create account at railway.app
+3. Connect GitHub repository
+4. Add environment variables in Railway dashboard
+5. Deploy (automatic on push)
+
+### Monitoring
+- Logs available in Railway dashboard
+- Automatic restart on crashes
+- Resource usage tracked in Metrics tab
 
 ## Database Schema
 
