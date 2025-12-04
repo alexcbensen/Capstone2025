@@ -16,29 +16,51 @@ class Database:
             password = os.getenv('SUPABASE_PASSWORD')
             encoded_password = quote(password, safe='')
 
-            # Use the transaction pooler connection string
             connection_string = f"postgresql://postgres.ghtyujswncdqrhetoovy:{encoded_password}@aws-1-us-east-2.pooler.supabase.com:6543/postgres"
 
-            # IMPORTANT: Disable statement caching for transaction pooler
             self.pool = await asyncpg.create_pool(
                 connection_string,
                 ssl='require',
                 min_size=1,
                 max_size=10,
-                statement_cache_size=0  # <-- Add this line to fix the error
+                statement_cache_size=0
             )
 
             # Create tables
             async with self.pool.acquire() as conn:
+                # Existing users table
                 await conn.execute('''
                     CREATE TABLE IF NOT EXISTS users (
                         discord_id BIGINT PRIMARY KEY,
                         epic_username VARCHAR(100) NOT NULL,
+                        account_id VARCHAR(100),
                         registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     );
                 ''')
 
-            print("✅ Connected to Supabase database via pooler!")
+                # Squads table
+                await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS squads (
+                        squad_id SERIAL PRIMARY KEY,
+                        squad_name VARCHAR(50) NOT NULL,
+                        created_by BIGINT,
+                        server_id BIGINT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(squad_name, server_id)
+                    );
+                ''')
+
+                # Squad members table
+                await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS squad_members (
+                        squad_id INTEGER REFERENCES squads(squad_id) ON DELETE CASCADE,
+                        discord_id BIGINT,
+                        joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (squad_id, discord_id)
+                    );
+                ''')
+
+            print("Connected to Supabase database via pooler!")
             return True
         except Exception as e:
             print(f"Database connection failed: {e}")
